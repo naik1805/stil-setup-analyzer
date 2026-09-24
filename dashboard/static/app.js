@@ -27,7 +27,8 @@ async function loadFiles() {
   const res = await fetch("/api/files");
   const data = await res.json();
   state.folderFiles = data.files || [];
-  $("folderHint").textContent = data.folder || "";
+  const folder = data.folder || "";
+  $("folderHint").textContent = /opt[/\\]render/i.test(folder) ? "" : folder;
   renderFileList();
 }
 
