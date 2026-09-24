@@ -16,6 +16,8 @@ Open http://127.0.0.1:8765
 
 Uses CPU GBC on hosts without a GPU. CUDA is used automatically when available.
 
-Deploy on Render: after this repo is on GitHub, open
+Repo: https://github.com/naik1805/stil-setup-analyzer
 
-`https://render.com/deploy?repo=<this-repo-url>`
+One-click host on Render (free CPU plan):
+
+https://render.com/deploy?repo=https://github.com/naik1805/stil-setup-analyzer
