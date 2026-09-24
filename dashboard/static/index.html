@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>STIL test-setup analyzer</title>
+  <link rel="stylesheet" href="/styles.css?v=18" />
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>STIL test-setup analyzer</h1>
+      <p class="sub">Pick the five partition files and click Analyze. You will see two lists: what is the same in every file, and what is unique to each file.</p>
+    </div>
+    <div class="top-meta" id="folderHint"></div>
+  </header>
+
+  <main class="layout">
+    <aside class="pane">
+      <h2>STIL files</h2>
+      <p class="hint">Select two or more to compare setup. Folder files load from disk. You can also drop extra <code>.stil</code> files.</p>
+      <div id="fileList" class="file-list"></div>
+      <label class="upload">
+        <input id="fileInput" type="file" accept=".stil,.STIL" multiple />
+        Add STIL files…
+      </label>
+      <div class="actions">
+        <button id="btnAll" type="button" class="ghost">Select all</button>
+        <button id="btnNone" type="button" class="ghost">Clear</button>
+        <button id="btnAnalyze" type="button" class="primary">Analyze setup</button>
+        <button id="btnDownload" type="button" class="ghost" disabled>Download HTML report</button>
+      </div>
+      <p id="status" class="status"></p>
+      <div id="hwAnalyze" class="hw-meter hidden"></div>
+    </aside>
+
+    <section class="content">
+      <div id="analyzeBusy" class="busy hidden">
+        <h2>Analyzing STIL files…</h2>
+        <p class="caption">RAM and GPU of this analyzer process while compare / parse runs.</p>
+        <div id="hwAnalyzeMain" class="hw-meter"></div>
+      </div>
+      <div id="empty" class="empty">
+        Select the five <code>IJTAG_dft_part_*</code> files, then click <strong>Analyze setup</strong>.
+        The result is a simple common vs not-common table — not a score.
+      </div>
+
+      <div id="results" class="hidden">
+        <div id="hwResults" class="hw-meter hidden"></div>
+        <div class="result-bar">
+          <div class="callout" id="hint"></div>
+          <button id="btnDownloadTop" type="button" class="primary">Download HTML report</button>
+        </div>
+        <div class="stats" id="stats"></div>
+
+        <h2>What is the same in every selected file</h2>
+        <p class="caption">These items match in all files you selected. This is the shared reset / protocol.</p>
+        <div class="table-wrap">
+          <table id="commonTable"></table>
+        </div>
+
+        <h2>What is different</h2>
+        <p class="caption">These items are not the same. For the five iJTAG files this is the DFT partition each file tests.</p>
+        <div class="table-wrap">
+          <table id="diffTable"></table>
+        </div>
+
+        <h2>Setup steps (same protocol)</h2>
+        <p class="caption">Each file does these actions. The *values* in the table above (which SIB opens) can still differ.</p>
+        <ul id="shared" class="event-list"></ul>
+
+        <h2>Per-file</h2>
+        <div id="cards" class="cards"></div>
+
+        <div class="opt-launch">
+          <p class="caption">Explore all setup clocks, then open review. The GBC only recommends. You Keep or Remove.</p>
+          <button id="btnExplore" type="button" class="primary">Explore 31 setup clocks</button>
+          <button id="btnOptimize" type="button" class="primary">Optimize setup clocks</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="exploreModal" class="modal hidden" role="dialog" aria-labelledby="exploreTitle">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="exploreTitle">All TEST_SETUP clocks</h2>
+        <button id="btnExploreClose" type="button" class="ghost">Close</button>
+      </div>
+      <p id="exploreStatus" class="caption">Each row is one tester clock in the bring-up, before the 1000 patterns.</p>
+      <div id="exploreBody"></div>
+      <div class="opt-actions">
+        <button id="btnDlExplore" type="button" class="primary" disabled>Download HTML report</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="optModal" class="modal hidden" role="dialog" aria-labelledby="optTitle">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="optTitle">Engineer review (Learning-to-Defer)</h2>
+        <button id="btnOptClose" type="button" class="ghost">Close</button>
+      </div>
+      <p id="optStatus" class="caption">GBC recommends. You decide Keep or Remove. Nothing is waste until you review it.</p>
+      <div id="hwOptimize" class="hw-meter hidden"></div>
+      <div id="optBody"></div>
+      <div class="opt-actions">
+        <button id="btnDlOptStil" type="button" class="primary" disabled>Download optimized STIL</button>
+        <button id="btnDlOptReport" type="button" class="ghost" disabled>Download HTML report</button>
+      </div>
+    </div>
+  </div>
+  <script src="app.js?v=20"></script>
+</body>
+</html>

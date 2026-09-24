@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: stil-setup-analyzer
+    runtime: python
+    plan: free
+    buildCommand: pip install -r dashboard/requirements-cloud.txt
+    startCommand: python dashboard/server.py
+    healthCheckPath: /health
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: STIL_DIR
+        value: /opt/render/project/src
