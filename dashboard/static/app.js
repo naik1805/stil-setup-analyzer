@@ -9,9 +9,53 @@ const state = {
   hwLivePeak: { ram_pct: 0, gpu_pct: 0, ram_mb: 0 },
   lastAnalyzePeak: null,
   lastOptimizePeak: null,
+  exploreRoleFilter: "all",
+  optimizeRoleFilter: "all",
 };
 
 const $ = (id) => document.getElementById(id);
+
+function isRejectClock(c) {
+  const d = String((c && (c.decision || c.rule_hint)) || "").toLowerCase();
+  return d === "waste" || d === "reject";
+}
+
+function clockRole(c) {
+  return isRejectClock(c) ? "reject" : "keep";
+}
+
+function clockRoleLabel(role) {
+  return role === "reject" ? "Reject" : "Keep";
+}
+
+function roleFilterBar(which, current) {
+  const opts = [
+    ["all", "All"],
+    ["keep", "Keep"],
+    ["reject", "Reject"],
+  ];
+  return `<div class="role-filter" data-which="${which}">
+    <span>Show</span>
+    ${opts
+      .map(
+        ([id, label]) =>
+          `<button type="button" class="ghost${current === id ? " on" : ""}" data-role-filter="${id}">${label}</button>`
+      )
+      .join("")}
+  </div>`;
+}
+
+function bindRoleFilter(root, which, onChange) {
+  if (!root) return;
+  root.querySelectorAll("[data-role-filter]").forEach((btn) => {
+    btn.onclick = () => {
+      const next = btn.getAttribute("data-role-filter") || "all";
+      if (which === "explore") state.exploreRoleFilter = next;
+      else state.optimizeRoleFilter = next;
+      onChange();
+    };
+  });
+}
 
 function fmtBytes(n) {
   if (n < 1024) return `${n} B`;
@@ -245,24 +289,59 @@ async function analyze() {
   }
 }
 
+function esc(v) {
+  return String(v == null ? "—" : v)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function fmtBits(val) {
+  const raw = String(val == null ? "" : val);
+  if (!/^[01]{17,}$/.test(raw)) return esc(raw || "—");
+  const ones = [];
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] === "1") ones.push(i);
+  }
+  const onesTxt =
+    ones.length === 0
+      ? "all 0"
+      : ones.length <= 12
+        ? `1 at bit ${ones.join(", ")}`
+        : `${ones.length} ones`;
+  const head = raw.slice(0, 8);
+  const tail = raw.slice(-8);
+  const sum = `${raw.length} bits · ${onesTxt} · first ${head} · last ${tail}`;
+  return `<details class="bits"><summary>${esc(sum)}</summary><code class="bits-dump">${esc(raw)}</code></details>`;
+}
+
+function perFileStack(reports, values) {
+  return reports
+    .map(
+      (r, i) =>
+        `<div class="per-file"><span class="pf-name">${esc(shortName(r.file))}</span><span class="pf-val">${fmtBits(values[i])}</span></div>`
+    )
+    .join("");
+}
+
 function fieldTable(tableId, rows, reports, emptyText, kind) {
   const el = $(tableId);
   if (!rows.length) {
-    el.innerHTML = `<tr><td>${emptyText}</td></tr>`;
+    el.innerHTML = `<tr><td>${esc(emptyText)}</td></tr>`;
     return;
   }
-  const cls = kind === "diff" ? "table-diff" : "table-same";
-  let html = `<tr><th>What</th>`;
-  reports.forEach((r) => {
-    html += `<th>${shortName(r.file)}</th>`;
-  });
-  html += "</tr>";
-  for (const row of rows) {
-    html += `<tr class="${cls}"><td>${row.item}</td>`;
-    for (const val of row.values) {
-      html += `<td>${val}</td>`;
+  if (kind === "same") {
+    let html = `<tr><th>What</th><th>Value in every file</th></tr>`;
+    for (const row of rows) {
+      html += `<tr class="table-same"><td>${esc(row.item)}</td><td>${fmtBits(row.values[0])}</td></tr>`;
     }
-    html += "</tr>";
+    el.innerHTML = html;
+    return;
+  }
+  let html = `<tr><th>What</th><th>Per file</th></tr>`;
+  for (const row of rows) {
+    html += `<tr class="table-diff"><td>${esc(row.item)}</td><td>${perFileStack(reports, row.values)}</td></tr>`;
   }
   el.innerHTML = html;
 }
@@ -280,6 +359,22 @@ function renderResults({ reports, compare }) {
   `;
   $("hint").textContent = compare.tester_hint;
 
+  const groups = compare.partition_groups || [];
+  const cross = groups.filter((g) => g.cross_test);
+  $("partitionGroups").innerHTML = groups.length
+    ? groups
+        .map((g) => {
+          const types = (g.test_types || []).join(", ");
+          const files = (g.files || []).map((f) => `${esc(f.file)} (${esc(f.test_type)})`).join("; ");
+          const flag = g.cross_test
+            ? `<span class="tag tag-keep">same partition, different tests</span>`
+            : "";
+          return `<div class="kv"><strong>${esc(g.partition)}</strong> · ${esc(types)} ${flag}<div class="caption">${files}</div></div>`;
+        })
+        .join("")
+    : "";
+  $("partitionGroupsWrap").classList.toggle("hidden", !groups.length);
+
   fieldTable("commonTable", compare.common_rows || [], reports, "Nothing is the same across these files.", "same");
   fieldTable("diffTable", compare.diff_rows || [], reports, "Nothing differs — all compared fields match.", "diff");
 
@@ -294,35 +389,27 @@ function renderResults({ reports, compare }) {
       return `<article class="card">
         <h3>${r.file}</h3>
         <div class="kv">Partition: <strong>${h.dft_partition || "—"}</strong></div>
-        <div class="kv">Open SIB: ${r.open_sib || "—"} (bits ${h.ijtag_sib_select || "—"})</div>
-        <div class="kv">TDR: ${h.ijtag_tdr || "—"}</div>
+        <div class="kv">Open SIB: ${esc(r.open_sib || "—")} · ${fmtBits(h.ijtag_sib_select)}</div>
+        <div class="kv">TDR: ${fmtBits(h.ijtag_tdr)}</div>
         <div class="kv">Scan chains: ${(r.scan_chains || []).join(", ") || "—"}</div>
-        <div class="kv">Fault: ${h.fault_model || "—"} · setup cycles: ${r.setup_cycles}</div>
+        <div class="kv">Fault: ${h.fault_model || "—"} · Test: ${h.test_set_type || "—"} · setup cycles: ${r.setup_cycles}</div>
       </article>`;
     })
     .join("");
 }
 
-function esc(v) {
-  return String(v == null ? "—" : v)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 function htmlTable(rows, reports, emptyText, kind) {
   if (!rows.length) return `<p class="empty-note">${esc(emptyText)}</p>`;
-  const cls = kind === "diff" ? "diff" : "same";
-  let html = "<table><thead><tr><th>What</th>";
-  reports.forEach((r) => {
-    html += `<th>${esc(shortName(r.file))}</th>`;
-  });
-  html += "</tr></thead><tbody>";
+  if (kind === "same") {
+    let html = `<table class="field-table"><thead><tr><th>What</th><th>Value in every file</th></tr></thead><tbody>`;
+    for (const row of rows) {
+      html += `<tr class="same"><td>${esc(row.item)}</td><td>${fmtBits(row.values[0])}</td></tr>`;
+    }
+    return html + "</tbody></table>";
+  }
+  let html = `<table class="field-table"><thead><tr><th>What</th><th>Per file</th></tr></thead><tbody>`;
   for (const row of rows) {
-    html += `<tr class="${cls}"><td>${esc(row.item)}</td>`;
-    for (const val of row.values) html += `<td>${esc(val)}</td>`;
-    html += "</tr>";
+    html += `<tr class="diff"><td>${esc(row.item)}</td><td>${perFileStack(reports, row.values)}</td></tr>`;
   }
   return html + "</tbody></table>";
 }
@@ -338,8 +425,8 @@ function buildHtmlReport({ reports, compare }) {
       return `<article class="card">
         <h3>${esc(r.file)}</h3>
         <p><b>Partition:</b> ${esc(h.dft_partition)}</p>
-        <p><b>Open SIB:</b> ${esc(r.open_sib)} (bits ${esc(h.ijtag_sib_select)})</p>
-        <p><b>TDR:</b> ${esc(h.ijtag_tdr)}</p>
+        <p><b>Open SIB:</b> ${esc(r.open_sib)} · ${fmtBits(h.ijtag_sib_select)}</p>
+        <p><b>TDR:</b> ${fmtBits(h.ijtag_tdr)}</p>
         <p><b>Scan chains:</b> ${esc((r.scan_chains || []).join(", "))}</p>
         <p><b>Fault:</b> ${esc(h.fault_model)} &nbsp; <b>Test type:</b> ${esc(h.test_set_type)}</p>
         <p><b>Setup cycles:</b> ${esc(r.setup_cycles)} &nbsp; <b>Reset pins:</b> ${esc((r.reset_pins || []).join(", "))}</p>
@@ -358,8 +445,12 @@ function buildHtmlReport({ reports, compare }) {
     h2 { margin: 28px 0 8px; font-size: 16px; }
     .meta, .caption { color: #5b6472; }
     .summary { background: #e8f0ff; border-left: 4px solid #3b7ddd; padding: 12px 14px; margin: 16px 0; }
-    table { border-collapse: collapse; width: 100%; background: #fff; margin: 8px 0 16px; }
-    th, td { border: 1px solid #d5dbe3; padding: 8px 10px; text-align: left; vertical-align: top; }
+    table { border-collapse: collapse; width: 100%; background: #fff; margin: 8px 0 16px; table-layout: fixed; }
+    th, td { border: 1px solid #d5dbe3; padding: 8px 10px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+    .per-file { display: grid; grid-template-columns: minmax(8rem, 32%) 1fr; gap: 4px 12px; padding: 4px 0; border-bottom: 1px solid #e6e9ee; }
+    .pf-name { color: #5b6472; word-break: break-all; }
+    details.bits summary { cursor: pointer; }
+    .bits-dump { display: block; margin-top: 8px; word-break: break-all; font-size: 11px; color: #5b6472; }
     th { background: #eef1f5; }
     tr.same td { background: #e6f6ec; }
     tr.diff td { background: #fdeee6; }
@@ -427,7 +518,7 @@ function selectedPayload() {
 
 function openExplore() {
   $("exploreModal").classList.remove("hidden");
-  $("exploreStatus").textContent = "Loading the 31 setup clocks…";
+  $("exploreStatus").textContent = "Loading setup clocks…";
   $("exploreBody").innerHTML = "";
   $("btnDlExplore").disabled = true;
   runExplore();
@@ -462,13 +553,15 @@ async function runExplore() {
 function renderExplore(data) {
   const g = data.guide || {};
   const cycles = g.cycles || [];
+  const filter = state.exploreRoleFilter || "all";
+  const shown = cycles.filter((c) => filter === "all" || clockRole(c) === filter);
   $("exploreStatus").textContent = data.note || "";
-  let rows = cycles
+  let rows = shown
     .map((c) => {
-      const kind = c.decision === "waste" ? "waste" : "keep";
+      const kind = clockRole(c);
       return `<tr class="row-${kind}">
         <td class="num">${c.index}</td>
-        <td><span class="tag tag-${kind}">${kind}</span></td>
+        <td><span class="tag tag-${kind}">${clockRoleLabel(kind)}</span></td>
         <td>${esc(c.label)}</td>
         <td>${esc(c.meaning)}</td>
         <td>${esc(c.pins)}</td>
@@ -480,14 +573,16 @@ function renderExplore(data) {
       <div class="stat"><b>${g.clock_count ?? cycles.length}</b><span>tester clocks in TEST_SETUP</span></div>
       <div class="stat"><b>${esc(shortName(g.file || ""))}</b><span>file used for this list</span></div>
     </div>
-    <p class="caption">Clock 0 is the first setup clock. After clock ${Math.max((g.clock_count || 1) - 1, 0)} the 1000 stuck-at patterns start. SIB/TDR pin values below are from this file; other files use the same steps with different TDI bits.</p>
+    ${roleFilterBar("explore", filter)}
+    <p class="caption">Clock 0 is the first setup clock. After clock ${Math.max((g.clock_count || 1) - 1, 0)} the 1000 stuck-at patterns start. Filter Keep or Reject. You control what is shown. SIB/TDR pin values below are from this file; other files use the same steps with different TDI bits.</p>
     <div class="table-wrap">
       <table class="cycle-table">
         <tr><th>#</th><th>Role</th><th>Name</th><th>What this clock does</th><th>Pins</th></tr>
-        ${rows}
+        ${rows || `<tr><td colspan="5" class="caption">No clocks in this filter.</td></tr>`}
       </table>
     </div>
   `;
+  bindRoleFilter($("exploreBody"), "explore", () => renderExplore(data));
 }
 
 function buildExploreHtml(data) {
@@ -495,8 +590,8 @@ function buildExploreHtml(data) {
   const when = new Date().toISOString();
   const rows = (g.cycles || [])
     .map((c) => {
-      const cls = c.decision === "waste" ? "waste" : "keep";
-      return `<tr class="${cls}"><td>${c.index}</td><td>${esc(c.decision)}</td><td>${esc(c.label)}</td><td>${esc(c.meaning)}</td><td>${esc(c.pins)}</td></tr>`;
+      const cls = clockRole(c);
+      return `<tr class="${cls}"><td>${c.index}</td><td>${clockRoleLabel(cls)}</td><td>${esc(c.label)}</td><td>${esc(c.meaning)}</td><td>${esc(c.pins)}</td></tr>`;
     })
     .join("");
   return `<!DOCTYPE html>
@@ -512,7 +607,7 @@ function buildExploreHtml(data) {
     th, td { border: 1px solid #d5dbe3; padding: 8px 10px; text-align: left; vertical-align: top; }
     th { background: #eef1f5; }
     tr.keep td { background: #e6f6ec; }
-    tr.waste td { background: #fdeee6; }
+    tr.reject td { background: #fdeee6; }
   </style>
 </head>
 <body>
@@ -594,13 +689,10 @@ function groupList(groups, mode) {
     .map((g, i) => {
       const clocks = (g.cycles || []).map((n) => n).join(", ");
       const pins = g.pins ? `<div class="clk">${esc(g.pins)}</div>` : "";
-      let btns = "";
-      if (mode === "review") {
-        btns = `<div class="review-btns">
+      const btns = `<div class="review-btns">
           <button type="button" class="btn-keep" data-rev="keep" data-gi="${i}">Keep</button>
-          <button type="button" class="btn-remove" data-rev="remove" data-gi="${i}">Remove</button>
+          <button type="button" class="btn-remove" data-rev="remove" data-gi="${i}">Reject</button>
         </div>`;
-      }
       const countBit = mode === "review" ? "" : ` · ${g.count} clock(s)`;
       return `<div class="opt-item" data-cycles="${esc(clocks)}">
         <div><strong>${esc(g.label)}</strong>${countBit}</div>
@@ -635,8 +727,8 @@ function downloadOptimizedStils() {
   downloadBlob(new Blob([bin], { type: "application/zip" }), data.zip_name || "optimized_stils.zip");
   $("optStatus").textContent =
     n > 0
-      ? `Downloaded STIL zip. Only ${n} clock(s) you marked Remove were cut.`
-      : "Downloaded STIL zip. No Remove yet, so setup clocks are unchanged.";
+      ? `Downloaded STIL zip. Only ${n} clock(s) you marked Reject were cut.`
+      : "Downloaded STIL zip. No Reject yet, so setup clocks are unchanged.";
 }
 
 function buildOptimizeHtml(data) {
@@ -664,12 +756,12 @@ function buildOptimizeHtml(data) {
     h1 { margin: 0 0 6px; font-size: 22px; }
     h2 { margin: 24px 0 8px; font-size: 16px; }
     h2.keep { color: #1b7a45; }
-    h2.waste { color: #a15c12; }
+    h2.reject { color: #a15c12; }
     .meta { color: #5b6472; }
     .stats { display: flex; gap: 24px; margin: 16px 0; }
     .item { background: #fff; border: 1px solid #d5dbe3; padding: 12px; margin: 0 0 10px; }
     .item.keep { border-left: 4px solid #1b7a45; }
-    .item.waste { border-left: 4px solid #c9841a; }
+    .item.reject { border-left: 4px solid #c9841a; }
     .item h3 { margin: 0 0 6px; font-size: 14px; }
     .clk { color: #3d6d8c; font-size: 12px; }
   </style>
@@ -686,8 +778,8 @@ function buildOptimizeHtml(data) {
   <h2>Files</h2>
   <ol>${files}</ol>
   ${block("Kept", s.kept, "keep")}
-  ${block("Needs engineer review", s.review, "waste")}
-  ${block("Removed after review", s.removed, "waste")}
+  ${block("Needs engineer review", s.review, "reject")}
+  ${block("Rejected after review", s.removed, "reject")}
 </body>
 </html>`;
 }
@@ -706,7 +798,10 @@ function renderOptimize(data) {
   const s = data.shared || {};
   const ltd = s.ltd || {};
   const gpu = (data.cuda && data.cuda.device) || (s.cuda && s.cuda.device);
+  const filter = state.optimizeRoleFilter || "all";
   $("optStatus").textContent = (s.note || "") + (gpu ? ` Running on CUDA (${gpu}).` : "");
+  const showKeep = filter === "all" || filter === "keep";
+  const showReject = filter === "all" || filter === "reject";
   $("optBody").innerHTML = `
     <div class="opt-summary">
       <div class="stat"><b>${s.before_clocks ?? "—"}</b><span>setup clocks</span></div>
@@ -714,21 +809,31 @@ function renderOptimize(data) {
       <div class="stat"><b>${s.cut_clocks ?? "—"}</b><span>you removed</span></div>
       <div class="stat"><b>${ltd.n_reviews ?? 0}</b><span>labels in the GBC so far</span></div>
     </div>
-    <p class="caption">Model: ${esc(ltd.source || "—")}${ltd.model_ready ? " (trained)" : " (rule prior until both Keep and Remove exist)"}. Recommend-cut and Defer are flags only.</p>
+    ${roleFilterBar("optimize", filter)}
+    <p class="caption">Model: ${esc(ltd.source || "—")}${ltd.model_ready ? " (trained)" : " (rule prior until both Keep and Reject exist)"}. Filter Keep or Reject. You control which clocks are listed. These rejection flags are recommendations only.</p>
     <div class="opt-cols">
-      <div class="opt-col keep">
-        <h3>Keep — no review needed</h3>
-        <p class="caption">SIB, TDR, IR, first reset, TAP exits. GBC cannot auto-remove these.</p>
+      ${
+        showKeep
+          ? `<div class="opt-col keep">
+        <h3>Keep — recommendations to keep</h3>
+        <p class="caption">SIB, TDR, IR, first reset, TAP exits. You can still Keep or Reject each group. GBC will not auto-cut these.</p>
         ${groupList(s.kept || [], "keep")}
-      </div>
-      <div class="opt-col review">
-        <h3>Review — recommend cut or unsure</h3>
-        <p class="caption">One row per tester clock. Click Keep or Remove. The GBC retrains from that clock.</p>
+      </div>`
+          : ""
+      }
+      ${
+        showReject
+          ? `<div class="opt-col review">
+        <h3>Recommendations for rejection</h3>
+        <p class="caption">One row per tester clock. These are recommendations only. Click Keep or Reject. You control the filter and the decision.</p>
         ${groupList(s.review || [], "review")}
-      </div>
+      </div>`
+          : ""
+      }
     </div>
-    ${(s.removed || []).length ? `<h3>Removed after your review</h3>${groupList(s.removed, "keep")}` : ""}
+    ${showReject && (s.removed || []).length ? `<h3>Rejected after your review</h3>${groupList(s.removed, "keep")}` : ""}
   `;
+  bindRoleFilter($("optBody"), "optimize", () => renderOptimize(data));
   $("optBody").querySelectorAll("[data-rev]").forEach((btn) => {
     btn.onclick = () => submitReview(btn.getAttribute("data-rev"), btn.closest(".opt-item"));
   });

@@ -4,13 +4,13 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>STIL test-setup analyzer</title>
-  <link rel="stylesheet" href="/styles.css?v=18" />
+  <link rel="stylesheet" href="/styles.css?v=22" />
 </head>
 <body>
   <header class="top">
     <div>
       <h1>STIL test-setup analyzer</h1>
-      <p class="sub">Pick the five partition files and click Analyze. You will see two lists: what is the same in every file, and what is unique to each file.</p>
+      <p class="sub">Pick partition files (stuck-at, ScanShift, MBIST). Analyze compares setup. Same DFT partition can share TEST_SETUP across those test types.</p>
     </div>
     <div class="top-meta">
       <a href="guide.html" style="color:#4c8dff; margin-right:12px">User guide</a>
@@ -21,7 +21,7 @@
   <main class="layout">
     <aside class="pane">
       <h2>STIL files</h2>
-      <p class="hint">Select two or more to compare setup. Folder files load from disk. You can also drop extra <code>.stil</code> files.</p>
+      <p class="hint">Select two or more to compare setup. Folder files load from disk. You can also drop extra <code>.stil</code> files. Stuck-at, ScanShift, and MBIST for the same partition share TEST_SETUP.</p>
       <div id="fileList" class="file-list"></div>
       <label class="upload">
         <input id="fileInput" type="file" accept=".stil,.STIL" multiple />
@@ -44,7 +44,7 @@
         <div id="hwAnalyzeMain" class="hw-meter"></div>
       </div>
       <div id="empty" class="empty">
-        Select the five <code>IJTAG_dft_part_*</code> files, then click <strong>Analyze setup</strong>.
+        Select the five <code>IJTAG_dft_part_*</code> stuck-at files, plus ScanShift / MBIST for the same partitions if you want the cross-test check. Then click <strong>Analyze setup</strong>.
         The result is a simple common vs not-common table — not a score.
       </div>
 
@@ -54,18 +54,23 @@
           <div class="callout" id="hint"></div>
           <button id="btnDownloadTop" type="button" class="primary">Download HTML report</button>
         </div>
+        <div id="partitionGroupsWrap" class="hidden">
+          <h2>Same partition across test types</h2>
+          <p class="caption">Setup-clock optimize applies per DFT island even when ScanShift, MBIST, and stuck-at are different files.</p>
+          <div id="partitionGroups"></div>
+        </div>
         <div class="stats" id="stats"></div>
 
         <h2>What is the same in every selected file</h2>
-        <p class="caption">These items match in all files you selected. This is the shared reset / protocol.</p>
+        <p class="caption">These items match in all files you selected. This is the shared reset / protocol. One value, not a column per file.</p>
         <div class="table-wrap">
-          <table id="commonTable"></table>
+          <table id="commonTable" class="field-table"></table>
         </div>
 
         <h2>What is different</h2>
-        <p class="caption">These items are not the same. For the five iJTAG files this is the DFT partition each file tests.</p>
+        <p class="caption">Each row is one field. File values stack under it so you do not scroll sideways. Long SIB/TDR strings are summarized; expand if you need the raw bits.</p>
         <div class="table-wrap">
-          <table id="diffTable"></table>
+          <table id="diffTable" class="field-table"></table>
         </div>
 
         <h2>Setup steps (same protocol)</h2>
@@ -76,8 +81,8 @@
         <div id="cards" class="cards"></div>
 
         <div class="opt-launch">
-          <p class="caption">Explore all setup clocks, then open review. The GBC only recommends. You Keep or Remove.</p>
-          <button id="btnExplore" type="button" class="primary">Explore 31 setup clocks</button>
+          <p class="caption">Explore all setup clocks, then open review. The GBC only recommends. You Keep or Reject.</p>
+          <button id="btnExplore" type="button" class="primary">Explore setup clocks</button>
           <button id="btnOptimize" type="button" class="primary">Optimize setup clocks</button>
         </div>
       </div>
@@ -104,7 +109,7 @@
         <h2 id="optTitle">Engineer review (Learning-to-Defer)</h2>
         <button id="btnOptClose" type="button" class="ghost">Close</button>
       </div>
-      <p id="optStatus" class="caption">GBC recommends. You decide Keep or Remove. Nothing is waste until you review it.</p>
+      <p id="optStatus" class="caption">GBC recommends rejections. You decide Keep or Reject. Nothing is Reject until you confirm it. Filter Keep / Reject yourself.</p>
       <div id="hwOptimize" class="hw-meter hidden"></div>
       <div id="optBody"></div>
       <div class="opt-actions">
@@ -113,6 +118,6 @@
       </div>
     </div>
   </div>
-  <script src="app.js?v=20"></script>
+  <script src="app.js?v=26"></script>
 </body>
 </html>

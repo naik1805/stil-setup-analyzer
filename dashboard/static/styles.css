@@ -31,9 +31,9 @@ h2 { margin: 22px 0 8px; font-size: 15px; font-weight: 600; }
 .sub { margin: 0; max-width: 720px; }
 .top-meta { font-size: 12px; text-align: right; }
 
-.layout { display: grid; grid-template-columns: 300px 1fr; min-height: calc(100vh - 88px); }
-.pane { padding: 16px; border-right: 1px solid var(--line); background: var(--panel); }
-.content { padding: 16px 24px 40px; }
+.layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: calc(100vh - 88px); }
+.pane { padding: 16px; border-right: 1px solid var(--line); background: var(--panel); min-width: 0; }
+.content { padding: 16px 24px 40px; min-width: 0; overflow-x: hidden; }
 .hidden { display: none !important; }
 
 .file-list { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; max-height: 48vh; overflow: auto; }
@@ -106,11 +106,37 @@ button:disabled { opacity: 0.5; cursor: default; }
 .unique-block { margin-bottom: 12px; }
 .unique-block h3 { margin: 0 0 4px; font-size: 13px; }
 
-.table-wrap { overflow: auto; margin-bottom: 8px; }
-table { border-collapse: collapse; width: 100%; min-width: 640px; }
-th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+.table-wrap { overflow-x: auto; max-width: 100%; margin-bottom: 8px; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
 th { background: var(--panel); position: sticky; top: 0; }
-table th:first-child, table td:first-child { min-width: 140px; font-weight: 600; }
+table th:first-child, table td:first-child { min-width: 120px; font-weight: 600; }
+table.field-table { table-layout: fixed; min-width: 0; }
+table.field-table th:first-child, table.field-table td:first-child { width: 11.5rem; }
+.per-file {
+  display: grid;
+  grid-template-columns: minmax(8rem, 32%) minmax(0, 1fr);
+  gap: 4px 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+.per-file:last-child { border-bottom: 0; padding-bottom: 0; }
+.per-file:first-child { padding-top: 0; }
+.pf-name { color: var(--muted); word-break: break-all; }
+.pf-val { min-width: 0; }
+details.bits { max-width: 100%; }
+details.bits summary { cursor: pointer; list-style-position: outside; }
+.bits-dump {
+  display: block;
+  margin-top: 8px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
 tr.table-same td { background: #163024; }
 tr.table-diff td { background: #3a2418; }
 .mark-same { color: var(--ok); }
@@ -151,11 +177,11 @@ tr.table-diff td { background: #3a2418; }
 .modal-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .modal-head h2 { margin: 0; }
 .opt-summary { display: flex; flex-wrap: wrap; gap: 16px; margin: 12px 0 18px; }
-.opt-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.opt-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
 .opt-col { border: 1px solid var(--line); background: var(--panel); padding: 12px; }
 .opt-col h3 { margin: 0 0 8px; font-size: 14px; }
 .opt-col.keep h3 { color: var(--ok); }
-.opt-col.waste h3, .opt-col.review h3 { color: var(--warn); }
+.opt-col.waste h3, .opt-col.review h3, .opt-col.reject h3 { color: var(--warn); }
 .review-btns { display: flex; gap: 8px; margin-top: 8px; }
 .btn-keep { border-color: var(--ok); color: var(--ok); }
 .btn-remove { border-color: var(--warn); color: var(--warn); }
@@ -170,10 +196,13 @@ tr.table-diff td { background: #3a2418; }
 .cycle-table { min-width: 720px; }
 .cycle-table td.num { width: 52px; font-weight: 700; }
 tr.row-keep td { background: #163024; }
-tr.row-waste td { background: #3a2418; }
+tr.row-waste td, tr.row-reject td { background: #3a2418; }
 .tag { font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
 .tag-keep { color: var(--ok); }
-.tag-waste { color: var(--warn); }
+.tag-waste, .tag-reject { color: var(--warn); }
+.role-filter { display: flex; align-items: center; gap: 8px; margin: 8px 0 12px; flex-wrap: wrap; }
+.role-filter span { color: var(--muted); }
+.role-filter button.on { background: var(--accent-2); border-color: var(--accent); color: #fff; }
 
 .busy {
   margin: 16px 0;

@@ -194,7 +194,13 @@ def analyze_stil(path: Path, raw: str | None = None) -> dict:
         family = "MY_TOP"
     if "DUT_TOP" in blob or "DUT_TOP" in text[:4000]:
         family = "DUT_TOP"
-    if "IJTAG" in blob or "dft_part_" in text[:4000].lower() or header.get("test_set_type") == "IJTAG_SCAN_TEST":
+    ttype = (header.get("test_set_type") or "").upper()
+    if (
+        "IJTAG" in blob
+        or "dft_part_" in text[:4000].lower()
+        or ttype in {"IJTAG_SCAN_TEST", "SCAN_SHIFT", "MBIST"}
+        or header.get("test_set_type") == "IJTAG_SCAN_TEST"
+    ):
         family = "IJTAG_DFT"
 
     setup_anns: list[str] = []
@@ -326,6 +332,7 @@ def compare_reports(reports: list[dict]) -> dict:
         else:
             diff_rows.append(row)
 
+    groups = partition_groups(reports)
     return {
         "files": names,
         "cuda": cuda_compare_files([r.get("setup_pin_matrix") or [] for r in reports]),
@@ -340,15 +347,56 @@ def compare_reports(reports: list[dict]) -> dict:
         "same_family": same_family,
         "common_rows": common_rows,
         "diff_rows": diff_rows,
-        "tester_hint": _plain_hint(reports, shared_ids, same_family, diff_rows),
+        "partition_groups": groups,
+        "tester_hint": _plain_hint(reports, shared_ids, same_family, diff_rows, groups),
     }
 
 
-def _plain_hint(reports, shared_ids, same_family, diff_rows) -> str:
+def partition_groups(reports: list[dict]) -> list[dict]:
+    buckets: dict[str, list[dict]] = {}
+    for r in reports:
+        h = r.get("header") or {}
+        part = h.get("dft_partition") or h.get("scan_partition") or "unknown"
+        buckets.setdefault(part, []).append(
+            {
+                "file": r.get("file"),
+                "test_type": h.get("test_set_type") or "—",
+                "setup_cycles": r.get("setup_expanded") or r.get("setup_cycles") or 0,
+                "sib": h.get("ijtag_sib_select") or "—",
+                "tdr": h.get("ijtag_tdr") or "—",
+            }
+        )
+    groups = []
+    for part, files in sorted(buckets.items()):
+        types = sorted({f["test_type"] for f in files})
+        clocks = {f["setup_cycles"] for f in files}
+        groups.append(
+            {
+                "partition": part,
+                "files": files,
+                "test_types": types,
+                "cross_test": len(types) > 1,
+                "same_setup_clocks": len(clocks) == 1,
+                "n_files": len(files),
+            }
+        )
+    return groups
+
+
+def _plain_hint(reports, shared_ids, same_family, diff_rows, groups=None) -> str:
     if len(reports) < 2:
         return "Select two or more STIL files, then click Analyze setup."
     if not same_family:
         return "These files are not the same kit. Reset/setup protocol may not be reusable."
+    groups = groups or []
+    cross = [g for g in groups if g.get("cross_test")]
+    if cross:
+        bits = ", ".join(f"{g['partition']} ({', '.join(g['test_types'])})" for g in cross)
+        return (
+            "Same DFT partition across different test types: " + bits + ". "
+            "TEST_SETUP clocks can be optimized once for that island (ScanShift / MBIST / stuck-at share bring-up). "
+            "Payload after setup still differs by test type."
+        )
     if diff_rows:
         items = ", ".join(r["item"] for r in diff_rows)
         return (
@@ -359,4 +407,4 @@ def _plain_hint(reports, shared_ids, same_family, diff_rows) -> str:
 
 
 def _tester_hint(reports: list[dict], shared_ids: set[str], same_family: bool) -> str:
-    return _plain_hint(reports, shared_ids, same_family, [])
+    return _plain_hint(reports, shared_ids, same_family, [], partition_groups(reports))

@@ -45,6 +45,10 @@ def _vec(feat: dict) -> list[float]:
     return [float(feat.get(k, 0)) for k in FEATURE_KEYS]
 
 
+def _is_reject_hint(c: dict) -> bool:
+    return c.get("rule_hint") in ("waste", "reject") or c.get("decision") in ("waste", "reject")
+
+
 def _load_reviews() -> list[dict]:
     if not REVIEWS_PATH.is_file():
         return []
@@ -112,7 +116,7 @@ def _cuda_gbc():
 def bootstrap_rows(classified: list[dict], file_name: str) -> list[tuple[list[float], int]]:
     rows = []
     for c in classified:
-        y = 1 if c.get("rule_hint") == "waste" else 0
+        y = 1 if _is_reject_hint(c) else 0
         rows.append((_vec(c.get("features") or {}), y))
     return rows
 
@@ -125,7 +129,7 @@ def train_gbc(extra_classified: list[list[dict]] | None = None) -> dict:
     for bundle in extra_classified or []:
         for c in bundle:
             X.append(_vec(c.get("features") or {}))
-            y.append(1 if c.get("rule_hint") == "waste" else 0)
+            y.append(1 if _is_reject_hint(c) else 0)
 
     for r in _load_reviews():
         if r.get("label") not in ("keep", "remove"):
@@ -212,7 +216,7 @@ def apply_ltd(classified: list[dict], file_name: str) -> tuple[list[dict], dict]
         if proba_rows is not None:
             p_cut = float(proba_rows[i][1])
             source = "gbc_cuda" if _cuda_ready() else "gbc"
-        elif c.get("rule_hint") == "waste":
+        elif _is_reject_hint(c):
             p_cut = 0.8
             source = "rule_prior"
         else:

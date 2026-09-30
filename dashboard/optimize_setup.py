@@ -1,4 +1,4 @@
-"""Label TEST_SETUP clocks as kept vs waste. Cut only duplicate / dual-reset / extra idle."""
+"""Label TEST_SETUP clocks as kept vs reject. Cut only duplicate / dual-reset / extra idle."""
 
 from __future__ import annotations
 
@@ -15,7 +15,11 @@ def extract_setup_region(text: str) -> str:
     start = text.find("Pattern ")
     if start < 0:
         start = 0
-    payload = re.search(r"pattern_numer:|vector_type:LOAD_UNLOAD", text[start:])
+    payload = re.search(
+        r"pattern_numer:|vector_type:LOAD_UNLOAD|vector_type:SCAN_SHIFT|vector_type:MBIST|"
+        r"SCAN_SHIFT PAYLOAD|MBIST PAYLOAD|STUCK-AT PAYLOAD",
+        text[start:],
+    )
     end = start + payload.start() if payload else len(text)
     return text[start:end]
 
@@ -125,7 +129,7 @@ def classify_cycles(cycles: list[dict]) -> list[dict]:
 
         if phase == "reset_assert":
             if seen_reset_assert or duplicate:
-                decision = "waste"
+                decision = "reject"
                 label = "Duplicate RESET/TRST hold"
                 reason = (
                     "CUT: pins are identical to the previous clock (RESET=0, TRST=0, TCK=0). "
@@ -147,7 +151,7 @@ def classify_cycles(cycles: list[dict]) -> list[dict]:
             )
         elif phase == "tms_tlr":
             if tap_reset_done:
-                decision = "waste"
+                decision = "reject"
                 label = "Second TAP reset (5x TMS=1)"
                 reason = (
                     "CUT: IEEE 1149.1 needs ONE TAP reset — either TRST or TMS=1 for 5 TCK. "
@@ -162,7 +166,7 @@ def classify_cycles(cycles: list[dict]) -> list[dict]:
                 )
         elif phase == "reset_release":
             if reset_released and pins.get("TCK") == "0":
-                decision = "waste"
+                decision = "reject"
                 label = "Extra idle after RESET release"
                 reason = (
                     "CUT: RESET is already 1 and TMS is already 0 from the previous clock. "
@@ -201,7 +205,7 @@ def classify_cycles(cycles: list[dict]) -> list[dict]:
             )
         elif phase == "exit_dr":
             if pins.get("TCK") == "0" and idle_hold_used:
-                decision = "waste"
+                decision = "reject"
                 label = "Extra idle after iJTAG"
                 reason = (
                     "CUT: Update-DR already happened. Another TCK=0 idle does not latch SIB/TDR again."
@@ -216,7 +220,7 @@ def classify_cycles(cycles: list[dict]) -> list[dict]:
                 )
         else:
             if duplicate:
-                decision = "waste"
+                decision = "reject"
                 label = "Duplicate hold"
                 reason = (
                     "CUT: every pin matches the previous clock. No TAP transition and no new data bit."
@@ -251,7 +255,7 @@ def classify_cycles(cycles: list[dict]) -> list[dict]:
             "is_tms_tlr": int(phase == "tms_tlr"),
             "is_reset_assert": int(phase == "reset_assert"),
             "loop_repeat": int(c.get("loop", 1) > 1),
-            "rule_says_cut": int(decision == "waste"),
+            "rule_says_cut": int(decision == "reject"),
         }
         out.append(row)
     return out
@@ -260,7 +264,7 @@ def classify_cycles(cycles: list[dict]) -> list[dict]:
 def _teach(phase: str, row: dict, index: int, pins: dict[str, str]) -> str:
     tdi = pins.get("TDI", "—")
     if phase == "reset_assert":
-        if row["decision"] == "waste":
+        if row["decision"] == "reject":
             return "Same reset levels as clock 0. The chip is already in reset. This clock does not start a new reset."
         return "Drive RESET=0 and TRST=0. Chip logic and the TAP start from a known reset, not a random power-up state."
     if phase == "trst_release":
@@ -272,7 +276,7 @@ def _teach(phase: str, row: dict, index: int, pins: dict[str, str]) -> str:
             "In this file TRST already reset the TAP, so this is a second reset."
         )
     if phase == "reset_release":
-        if row["decision"] == "waste":
+        if row["decision"] == "reject":
             return "RESET is already 1 and TMS is already 0. Extra idle. The chip is already out of reset."
         return "Release RESET (RESET=1) and drop TMS so the TAP can leave reset and move toward idle. Scan cannot run while RESET=0."
     if phase == "ir":
@@ -338,7 +342,7 @@ def explain_many(items: list[dict]) -> dict:
 
 def summarize(classified: list[dict]) -> dict:
     kept = [c for c in classified if c["decision"] == "keep"]
-    waste = [c for c in classified if c["decision"] == "waste"]
+    reject = [c for c in classified if c["decision"] in ("reject", "waste")]
 
     def groups(rows: list[dict], decision: str) -> list[dict]:
         buckets: dict[str, dict] = {}
@@ -365,7 +369,8 @@ def summarize(classified: list[dict]) -> dict:
         "after_clocks": after,
         "cut_clocks": before - after,
         "kept": groups(kept, "keep"),
-        "waste": groups(waste, "waste"),
+        "reject": groups(reject, "reject"),
+        "waste": groups(reject, "reject"),
         "cycles": [
             {
                 "index": c["index"],
@@ -385,7 +390,7 @@ def _fmt_pins(pins: dict[str, str]) -> str:
 
 def emit_optimized_setup(classified: list[dict]) -> str:
     lines = [
-        "  // ----- OPTIMIZED TEST_SETUP (waste clocks removed) -----",
+        "  // ----- OPTIMIZED TEST_SETUP (reject clocks removed) -----",
         "  Ann {* optimized_setup: duplicate hold, second TAP reset, extra idle cut *}",
     ]
     n = 0
@@ -506,7 +511,7 @@ def optimize_stil(path: Path, raw: str | None = None, classified: list[dict] | N
         classified = classify_cycles(extract_setup_cycles(text))
     classified, meta = apply_ltd(classified, name)
     for c in classified:
-        c["decision"] = "waste" if c.get("final") == "remove" else "keep"
+        c["decision"] = "reject" if c.get("final") == "remove" else "keep"
     summary = summarize_ltd(classified)
     summary["file"] = name
     summary["ltd"] = meta
@@ -545,12 +550,25 @@ def optimize_many(items: list[dict]) -> dict:
         slim.append({k: v for k, v in f.items() if k != "optimized_text"})
         slim[-1]["has_optimized"] = True
     from cuda_job import cuda_info
+    from stil_setup import analyze_stil, partition_groups
+
+    reports = [analyze_stil(p["path"], raw=p["text"]) for p in prepared]
+    groups = partition_groups(reports)
+    cross = [g for g in groups if g.get("cross_test")]
+    extra = ""
+    if cross:
+        extra = (
+            " Same-partition setup also covers ScanShift / MBIST / stuck-at: "
+            + "; ".join(f"{g['partition']}={','.join(g['test_types'])}" for g in cross)
+            + "."
+        )
 
     return {
         "files": slim,
         "zip_name": "IJTAG_optimized_stils.zip",
         "zip_b64": zip_b64,
         "cuda": cuda_info(),
+        "partition_groups": groups,
         "shared": {
             "before_clocks": first["before_clocks"],
             "after_clocks": first["after_clocks"],
@@ -561,9 +579,11 @@ def optimize_many(items: list[dict]) -> dict:
             "removed": first.get("removed") or [],
             "ltd": first.get("ltd") or {},
             "same_for_all": all(f["before_clocks"] == first["before_clocks"] for f in files),
+            "partition_groups": groups,
             "note": (
                 f"CUDA GBC Learning-to-Defer scored {first['before_clocks']} tester clocks. "
-                "Nothing is waste until you click Remove. SIB/TDR/IR stay Keep unless you override later."
+                "Nothing is Reject until you click Reject. SIB/TDR/IR stay Keep unless you override later."
+                + extra
             ),
         },
     }

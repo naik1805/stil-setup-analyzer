@@ -90,7 +90,7 @@
         <h2><span class="num">1</span> Select or insert STIL files</h2>
         <p>On the left pane, pick the files you want to compare. Use the kit files already listed, or insert your own.</p>
         <ol class="do">
-          <li>Tick two or more <code>.stil</code> files (the five <code>IJTAG_dft_part_*</code> files are the usual set).</li>
+          <li>Tick two or more <code>.stil</code> files. The kit has stuck-at, ScanShift, and MBIST for <code>dft_part_0</code>…<code>4</code> (same TEST_SETUP per partition).</li>
           <li>Or click <strong>Add STIL files…</strong> / drop extra <code>.stil</code> files to insert them.</li>
           <li>Use <strong>Select all</strong> or <strong>Clear</strong> if you need to reset the list.</li>
         </ol>
@@ -106,7 +106,7 @@
         <ol class="do">
           <li>Wait for the analyzing window. RAM and GPU bars update while the job runs, then freeze at the recorded peak.</li>
           <li>When it finishes you should see a status such as analyzed file count (on CUDA if a GPU is present).</li>
-          <li>Read <strong>What is the same</strong> and <strong>What is different</strong>.</li>
+          <li>Read <strong>What is the same</strong> and <strong>What is different</strong>. File values stack in two columns so you do not scroll sideways. SIB is 64 bits (select); TDR is 1400 bits (config) — summarized unless you expand.</li>
         </ol>
         <div class="shot">
           <img src="guide/analyze-done.png" alt="Analyzed five files status" />
@@ -129,28 +129,29 @@
 
       <section class="card">
         <h2><span class="num">4</span> Explore all setup clocks</h2>
-        <p>Click <strong>Explore 31 setup clocks</strong>. This lists every tester clock in the bring-up and explains what it is (reset, TAP, Shift-IR, SIB, TDR, exits).</p>
+        <p>Click <strong>Explore setup clocks</strong>. This lists every tester clock in the bring-up (about 1600 on this kit) and explains what it is (reset, TAP, Shift-IR, SIB, TDR, exits, PLL/EDT tail).</p>
         <ol class="do">
           <li>Read each clock: needed protocol vs extra idle / duplicate / second TAP reset.</li>
-          <li>The table lists <strong>#</strong>, <strong>Role</strong> (Keep / Waste), <strong>Name</strong>, <strong>What this clock does</strong>, and <strong>Pins</strong>.</li>
+          <li>The table lists <strong>#</strong>, <strong>Role</strong> (Keep / Reject), <strong>Name</strong>, <strong>What this clock does</strong>, and <strong>Pins</strong>.</li>
+          <li>Use <strong>Show: All / Keep / Reject</strong> to filter the list. You control that filter.</li>
           <li>Click <strong>Download HTML report</strong> in the Explore window to save the full clock guide.</li>
         </ol>
         <div class="shot">
-          <img src="guide/explore-test-setup.png" alt="Explore All TEST_SETUP clocks table with Keep and Waste rows" />
+          <img src="guide/explore-test-setup.png" alt="Explore All TEST_SETUP clocks table with Keep and Reject rows" />
         </div>
-        <p class="caption">Explore window — <strong>All TEST_SETUP clocks</strong>. Clock 0 is the first setup clock. After clock 30 the 1000 stuck-at patterns start. SIB/TDR pin values are from this file; other files use the same steps with different TDI bits.</p>
+        <p class="caption">Explore window — <strong>All TEST_SETUP clocks</strong>. Clock 0 is the first setup clock. After clock 1599 the 1000 stuck-at patterns start (~1600 bring-up clocks: 32-bit IR, 64-bit SIB, 1400-bit TDR, PLL tail). SIB/TDR pin values are from this file; other files use the same steps with different TDI bits.</p>
         <div class="shot">
-          <img src="guide/explore-clocks.png" alt="Explore window: kept clocks and waste clocks grouped" />
+          <img src="guide/explore-clocks.png" alt="Explore window: kept clocks and reject clocks grouped" />
         </div>
-        <p class="caption">Same Explore flow, grouped: each tester clock and why it is kept or looks like waste. SIB / TDR / IR stay required.</p>
+        <p class="caption">Same Explore flow, grouped: each tester clock and why it is Keep or Reject. SIB / TDR / IR stay required.</p>
       </section>
 
       <section class="card">
         <h2><span class="num">5</span> Click Optimize to review optimized clocks</h2>
-        <p>Click <strong>Optimize setup clocks</strong>. The review window scores clocks with Learning-to-Defer + GBC. Nothing is cut until you click <strong>Remove</strong>.</p>
+        <p>Click <strong>Optimize setup clocks</strong>. The review window lists <strong>recommendations for rejection</strong>. Nothing is cut until you click <strong>Reject</strong>.</p>
         <ol class="do">
-          <li>Left: <span class="tag">Keep</span> — no review needed (SIB, TDR, IR, first reset, TAP exits).</li>
-          <li>Right: <span class="tag-w">Review</span> — recommend cut or unsure. Click <strong>Keep</strong> or <strong>Remove</strong> for each clock.</li>
+          <li>Left: <span class="tag">Keep</span> — recommended keep (SIB, TDR, IR, first reset, TAP exits). You can still click <strong>Keep</strong> or <strong>Reject</strong>.</li>
+          <li>Right: <span class="tag-w">Recommendations for rejection</span>. Click <strong>Keep</strong> or <strong>Reject</strong> for each clock.</li>
           <li>The model retrains from your labels. Protected protocol is not auto-removed.</li>
         </ol>
         <div class="shot">
@@ -193,7 +194,7 @@
             <tr>
               <td>Optimize window</td>
               <td><strong>Download optimized STIL</strong></td>
-              <td>ZIP of rewritten STILs. Only clocks you marked <strong>Remove</strong> are cut.</td>
+              <td>ZIP of rewritten STILs. Only clocks you marked <strong>Reject</strong> are cut.</td>
             </tr>
           </tbody>
         </table>
