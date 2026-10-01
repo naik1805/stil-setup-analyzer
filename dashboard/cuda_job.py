@@ -92,6 +92,76 @@ def cuda_analyze_file(text: str, pin_matrix: list[list[int]]) -> dict:
     }
 
 
+def _row_key(row) -> tuple:
+    return tuple(int(x) for x in row)
+
+
+def genuine_commonality(matrices: list[list[list[int]]]) -> dict:
+    """Clock-accurate commonality: identical pin vectors, not event-name Jaccard.
+
+    Headline pct = clocks that match in every file / clocks compared.
+    Per-clock pct = files that share the majority pin vector / files compared.
+    """
+    usable = [m for m in matrices if m]
+    files_n = len(usable)
+    if files_n == 0:
+        return {
+            "files_n": 0,
+            "clocks": 0,
+            "matched": 0,
+            "unmatched": 0,
+            "pct": None,
+            "cycles": [],
+        }
+    n = min(len(m) for m in usable)
+    if files_n == 1:
+        return {
+            "files_n": 1,
+            "clocks": n,
+            "matched": n,
+            "unmatched": 0,
+            "pct": 100.0 if n else None,
+            "cycles": [
+                {
+                    "index": i,
+                    "pct": 100.0,
+                    "match_all": True,
+                    "agree_n": 1,
+                    "files_n": 1,
+                }
+                for i in range(n)
+            ],
+        }
+    cycles = []
+    matched = 0
+    for i in range(n):
+        keys = [_row_key(m[i]) for m in usable]
+        counts: dict[tuple, int] = {}
+        for k in keys:
+            counts[k] = counts.get(k, 0) + 1
+        agree_n = max(counts.values()) if counts else 0
+        all_same = len(counts) == 1
+        if all_same:
+            matched += 1
+        cycles.append(
+            {
+                "index": i,
+                "pct": round(100.0 * agree_n / files_n, 1) if files_n else 0.0,
+                "match_all": all_same,
+                "agree_n": agree_n,
+                "files_n": files_n,
+            }
+        )
+    return {
+        "files_n": files_n,
+        "clocks": n,
+        "matched": matched,
+        "unmatched": n - matched,
+        "pct": round(100.0 * matched / n, 1) if n else None,
+        "cycles": cycles,
+    }
+
+
 def cuda_compare_files(matrices: list[list[list[int]]]) -> dict:
     torch = _torch()
     if torch is None or not torch.cuda.is_available():

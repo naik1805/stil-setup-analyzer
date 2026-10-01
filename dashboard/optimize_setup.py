@@ -458,32 +458,14 @@ def summarize_ltd(classified: list[dict]) -> dict:
             buckets[key]["count"] += 1
         return list(buckets.values())
 
-    def one_each(rows: list[dict], decision: str) -> list[dict]:
-        items = []
-        for c in sorted(rows, key=lambda x: x["index"]):
-            items.append(
-                {
-                    "label": f"Clock {c['index']}: {c['label']}",
-                    "reason": c.get("meaning") or c.get("reason"),
-                    "decision": decision,
-                    "ltd_action": c.get("ltd_action"),
-                    "cycles": [c["index"]],
-                    "count": 1,
-                    "p_cut": c.get("p_cut"),
-                    "features": c.get("features"),
-                    "pins": c.get("pins_text") or "",
-                }
-            )
-        return items
-
     return {
         "before_clocks": len(classified),
         "after_clocks": len(keep) + len(review),
         "cut_clocks": len(removed),
         "review_clocks": len(review),
         "kept": groups(keep, "keep"),
-        "review": one_each(review, "review"),
-        "removed": one_each(removed, "remove"),
+        "review": groups(review, "review"),
+        "removed": groups(removed, "remove"),
         "cycles": [
             {
                 "index": c["index"],

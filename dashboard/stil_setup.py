@@ -6,8 +6,8 @@ import hashlib
 import re
 from pathlib import Path
 
-from optimize_setup import extract_setup_cycles
-from cuda_job import cuda_analyze_file, cuda_compare_files, encode_pin_matrix
+from optimize_setup import classify_cycles, extract_setup_cycles
+from cuda_job import PIN_ORDER, cuda_analyze_file, cuda_compare_files, encode_pin_matrix, genuine_commonality
 
 TOP_BLOCKS = (
     "Header",
@@ -248,6 +248,7 @@ def analyze_stil(path: Path, raw: str | None = None) -> dict:
         "setup_ann_count": setup_ann_count,
         "setup_expanded": setup_expanded,
         "setup_pin_matrix": setup_pin_matrix,
+        "setup_phases": [c.get("phase") or "other" for c in setup_cycle_rows],
         "cuda": cuda_meta,
         "setup_events": events,
         "setup_notes": notes,
@@ -255,6 +256,69 @@ def analyze_stil(path: Path, raw: str | None = None) -> dict:
         "has_test_setup_vectors": setup_cycles > 0 and "TEST_SETUP" in vector_counts,
         "has_procedure_setup": bool(procedures),
     }
+
+
+def _cycles_for_classify(report: dict) -> list[dict]:
+    matrix = report.get("setup_pin_matrix") or []
+    phases = report.get("setup_phases") or []
+    out = []
+    for i, row in enumerate(matrix):
+        pins = {
+            PIN_ORDER[j]: "1" if j < len(row) and row[j] else "0"
+            for j in range(len(PIN_ORDER))
+        }
+        out.append(
+            {
+                "index": i,
+                "pins": pins,
+                "phase": phases[i] if i < len(phases) else "other",
+                "loop": 1,
+                "loop_i": 0,
+            }
+        )
+    return out
+
+
+def _decorate_commonality(score: dict, report0: dict | None) -> dict:
+    cycles = list(score.get("cycles") or [])
+    classified = classify_cycles(_cycles_for_classify(report0)) if report0 else []
+    by_i = {c["index"]: c for c in classified}
+    for row in cycles:
+        c = by_i.get(row["index"], {})
+        reject = str(c.get("decision") or "").lower() in {"reject", "waste"}
+        prot = bool(c.get("protected"))
+        row["recommend"] = "keep" if prot or not reject else "redundant"
+        row["label"] = c.get("label") or "Setup clock"
+        row["phase"] = c.get("phase") or "other"
+        row["reason"] = c.get("reason") or ""
+        row["protected"] = prot
+    score["cycles"] = cycles
+    score["redundant_n"] = sum(1 for r in cycles if r.get("recommend") == "redundant")
+    score["keep_n"] = sum(1 for r in cycles if r.get("recommend") == "keep")
+    return score
+
+
+def _pin_text(row) -> str:
+    return " ".join(
+        f"{PIN_ORDER[j]}={'1' if j < len(row) and row[j] else '0'}"
+        for j in range(len(PIN_ORDER))
+    )
+
+
+def _score_reports(reports: list[dict]) -> dict:
+    matrices = [r.get("setup_pin_matrix") or [] for r in reports]
+    score = genuine_commonality(matrices)
+    score = _decorate_commonality(score, reports[0] if reports else None)
+    for row in score.get("cycles") or []:
+        if row.get("match_all"):
+            continue
+        i = row["index"]
+        row["per_file"] = []
+        for r in reports:
+            matrix = r.get("setup_pin_matrix") or []
+            pins = matrix[i] if i < len(matrix) else []
+            row["per_file"].append({"file": r.get("file"), "pins": _pin_text(pins)})
+    return score
 
 
 def compare_reports(reports: list[dict]) -> dict:
@@ -333,6 +397,7 @@ def compare_reports(reports: list[dict]) -> dict:
             diff_rows.append(row)
 
     groups = partition_groups(reports)
+    commonality = _score_reports(reports)
     return {
         "files": names,
         "cuda": cuda_compare_files([r.get("setup_pin_matrix") or [] for r in reports]),
@@ -348,7 +413,8 @@ def compare_reports(reports: list[dict]) -> dict:
         "common_rows": common_rows,
         "diff_rows": diff_rows,
         "partition_groups": groups,
-        "tester_hint": _plain_hint(reports, shared_ids, same_family, diff_rows, groups),
+        "commonality": commonality,
+        "tester_hint": _plain_hint(reports, shared_ids, same_family, diff_rows, groups, commonality),
     }
 
 
@@ -370,6 +436,9 @@ def partition_groups(reports: list[dict]) -> list[dict]:
     for part, files in sorted(buckets.items()):
         types = sorted({f["test_type"] for f in files})
         clocks = {f["setup_cycles"] for f in files}
+        names = {f["file"] for f in files}
+        island_reports = [r for r in reports if r.get("file") in names]
+        island_score = genuine_commonality([r.get("setup_pin_matrix") or [] for r in island_reports]) if len(island_reports) > 1 else None
         groups.append(
             {
                 "partition": part,
@@ -378,32 +447,45 @@ def partition_groups(reports: list[dict]) -> list[dict]:
                 "cross_test": len(types) > 1,
                 "same_setup_clocks": len(clocks) == 1,
                 "n_files": len(files),
+                "commonality_pct": island_score.get("pct") if island_score else (100.0 if files else None),
+                "commonality_matched": island_score.get("matched") if island_score else (files[0]["setup_cycles"] if files else 0),
+                "commonality_clocks": island_score.get("clocks") if island_score else (files[0]["setup_cycles"] if files else 0),
             }
         )
     return groups
 
 
-def _plain_hint(reports, shared_ids, same_family, diff_rows, groups=None) -> str:
+def _plain_hint(reports, shared_ids, same_family, diff_rows, groups=None, commonality=None) -> str:
     if len(reports) < 2:
         return "Select two or more STIL files, then click Analyze setup."
     if not same_family:
         return "These files are not the same kit. Reset/setup protocol may not be reusable."
     groups = groups or []
+    com = commonality or {}
+    if com.get("pct") is not None:
+        score_txt = (
+            f"Genuine commonality {com['pct']}% "
+            f"({com.get('matched', 0)} / {com.get('clocks', 0)} TEST_SETUP clocks identical in all {com.get('files_n', 0)} files)."
+        )
+    else:
+        score_txt = ""
     cross = [g for g in groups if g.get("cross_test")]
     if cross:
         bits = ", ".join(f"{g['partition']} ({', '.join(g['test_types'])})" for g in cross)
         return (
-            "Same DFT partition across different test types: " + bits + ". "
+            (score_txt + " " if score_txt else "")
+            + "Same DFT partition across different test types: " + bits + ". "
             "TEST_SETUP clocks can be optimized once for that island (ScanShift / MBIST / stuck-at share bring-up). "
             "Payload after setup still differs by test type."
         )
     if diff_rows:
         items = ", ".join(r["item"] for r in diff_rows)
         return (
-            "COMMON: the reset and iJTAG *steps* (what is done). "
+            (score_txt + " " if score_txt else "")
+            + "COMMON: the reset and iJTAG *steps* (what is done). "
             "NOT COMMON: " + items + " (which partition is selected)."
         )
-    return "These files use the same setup steps and the same partition settings."
+    return (score_txt + " " if score_txt else "") + "These files use the same setup steps and the same partition settings."
 
 
 def _tester_hint(reports: list[dict], shared_ids: set[str], same_family: bool) -> str:

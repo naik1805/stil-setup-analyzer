@@ -11,6 +11,9 @@ const state = {
   lastOptimizePeak: null,
   exploreRoleFilter: "all",
   optimizeRoleFilter: "all",
+  commonalityMin: 90,
+  browseOpen: false,
+  browsePage: 0,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -341,26 +344,220 @@ function fieldTable(tableId, rows, reports, emptyText, kind) {
   }
   let html = `<tr><th>What</th><th>Per file</th></tr>`;
   for (const row of rows) {
-    html += `<tr class="table-diff"><td>${esc(row.item)}</td><td>${perFileStack(reports, row.values)}</td></tr>`;
+    const stack = perFileStack(reports, row.values);
+    html += `<tr class="table-diff"><td>${esc(row.item)}</td><td><details class="fold"><summary>${reports.length} files — expand</summary>${stack}</details></td></tr>`;
   }
   el.innerHTML = html;
+}
+
+function clockRanges(indices) {
+  const sorted = [...indices].sort((a, b) => a - b);
+  if (!sorted.length) return "";
+  const parts = [];
+  let a = sorted[0];
+  let b = a;
+  for (const i of sorted.slice(1)) {
+    if (i === b + 1) {
+      b = i;
+      continue;
+    }
+    parts.push(a === b ? `#${a}` : `#${a}–${b}`);
+    a = b = i;
+  }
+  parts.push(a === b ? `#${a}` : `#${a}–${b}`);
+  return parts.join(", ");
+}
+
+const BROWSE_PAGE = 25;
+
+function groupCommonClocks(cycles) {
+  const map = new Map();
+  for (const c of cycles) {
+    if (!c.match_all) continue;
+    const key = `${c.label}\0${c.recommend}`;
+    if (!map.has(key)) {
+      map.set(key, {
+        label: c.label,
+        recommend: c.recommend === "redundant" ? "redundant" : "keep",
+        reason: c.reason || "",
+        indices: [],
+      });
+    }
+    map.get(key).indices.push(c.index);
+  }
+  return [...map.values()].map((g) => ({
+    ...g,
+    count: g.indices.length,
+    clocks: clockRanges(g.indices),
+  }));
+}
+
+function commonalityFilterBar(current) {
+  const opts = [
+    [90, "≥ 90%"],
+    [80, "≥ 80%"],
+    [70, "≥ 70%"],
+    [0, "All"],
+  ];
+  return `<div class="role-filter" data-which="commonality">
+    <span>Show clocks at</span>
+    ${opts
+      .map(
+        ([min, label]) =>
+          `<button type="button" class="ghost${current === min ? " on" : ""}" data-com-min="${min}">${label}</button>`
+      )
+      .join("")}
+  </div>`;
+}
+
+function renderCommonality(compare) {
+  const wrap = $("commonalityWrap");
+  const clockWrap = $("clockReportWrap");
+  const com = compare && compare.commonality;
+  if (!wrap) return;
+  if (!com || com.pct == null || (com.files_n || 0) < 2) {
+    wrap.classList.add("hidden");
+    if (clockWrap) clockWrap.classList.add("hidden");
+    return;
+  }
+  wrap.classList.remove("hidden");
+  if (clockWrap) clockWrap.classList.remove("hidden");
+  const min = state.commonalityMin;
+  $("commonalityScore").innerHTML = `
+    <div class="commonality-score">
+      <div>
+        <div class="pct">${com.pct}%</div>
+        <div class="frac">${com.matched} / ${com.clocks} clocks identical in all ${com.files_n} files</div>
+      </div>
+      <div class="stat"><b>${com.unmatched}</b><span>clocks not identical in every file</span></div>
+      <div class="stat"><b>${com.keep_n ?? "—"}</b><span>Keep</span></div>
+      <div class="stat"><b>${com.redundant_n ?? "—"}</b><span>Redundant (rule)</span></div>
+    </div>
+    <p class="caption">This percent is matching tester clocks, not event-name overlap. A clock is counted only when every selected file has the same pin values at that index.</p>
+  `;
+  const groups = compare.partition_groups || [];
+  $("commonalityIslands").innerHTML = groups.length
+    ? groups
+        .map((g) => {
+          const pct = g.commonality_pct;
+          const frac =
+            pct == null
+              ? "—"
+              : `${pct}% (${g.commonality_matched ?? "?"} / ${g.commonality_clocks ?? "?"} clocks)`;
+          return `<div class="island-score kv"><strong>${esc(g.partition)}</strong> · ${esc((g.test_types || []).join(", "))} · ${frac}</div>`;
+        })
+        .join("")
+    : "";
+  const commonGroups = groupCommonClocks(com.cycles || []);
+  const commonEl = $("commonClocksTable");
+  if (commonEl) {
+    if (!commonGroups.length) {
+      commonEl.innerHTML = `<tr><td>No clocks are identical in every selected file.</td></tr>`;
+    } else {
+      let html = `<tr><th>What</th><th>Tester clocks</th><th>Recommend</th></tr>`;
+      for (const g of commonGroups) {
+        html += `<tr class="table-same"><td>${esc(g.label)} · ${g.count} clock(s)</td><td>${esc(g.clocks)}</td><td><span class="tag tag-${g.recommend}">${g.recommend === "redundant" ? "Redundant" : "Keep"}</span></td></tr>`;
+      }
+      commonEl.innerHTML = html;
+    }
+  }
+  const uncommon = (com.cycles || []).filter((c) => !c.match_all);
+  const uncommonEl = $("uncommonClocksTable");
+  if (uncommonEl) {
+    if (!uncommon.length) {
+      uncommonEl.innerHTML = `<tr class="table-same"><td>Every TEST_SETUP clock matches in all ${com.files_n} files. Nothing is not-common.</td></tr>`;
+    } else {
+      let html = `<tr><th>Clock</th><th>Per file (why it is not common)</th><th>Recommend</th></tr>`;
+      for (const c of uncommon) {
+        const rec = c.recommend === "redundant" ? "redundant" : "keep";
+        const files = (c.per_file || [])
+          .map(
+            (f) =>
+              `<div class="per-file"><span class="pf-name">${esc(shortName(f.file))}</span><span class="pf-val">${esc(f.pins)}</span></div>`
+          )
+          .join("");
+        const nfiles = (c.per_file || []).length;
+        const body = files
+          ? `<details class="fold"><summary>${nfiles} files — expand pins</summary>${files}</details>`
+          : "—";
+        html += `<tr class="table-diff"><td>#${c.index}<div class="caption">${esc(c.label)} · ${c.pct}% · ${c.agree_n}/${c.files_n} files</div></td><td>${body}</td><td><span class="tag tag-${rec}">${rec === "redundant" ? "Redundant" : "Keep"}</span></td></tr>`;
+      }
+      uncommonEl.innerHTML = html;
+    }
+  }
+  if ($("commonalityFilter")) {
+    const rows = (com.cycles || []).filter((c) => (c.pct ?? 0) >= min);
+    const pages = Math.max(1, Math.ceil(rows.length / BROWSE_PAGE));
+    if (state.browsePage >= pages) state.browsePage = 0;
+    $("commonalityFilter").innerHTML = `
+      ${commonalityFilterBar(min)}
+      <p class="caption">${rows.length} clocks at this threshold, shown as ${groupCommonClocks(rows.filter((c) => c.match_all)).length} common groups above. The raw list is optional and paged.</p>
+      <button type="button" class="ghost" id="btnBrowseToggle">${state.browseOpen ? "Hide raw clock pages" : "Show raw clock pages (25 at a time)"}</button>
+    `;
+    $("commonalityFilter").querySelectorAll("[data-com-min]").forEach((btn) => {
+      btn.onclick = () => {
+        state.commonalityMin = Number(btn.getAttribute("data-com-min") || 0);
+        state.browsePage = 0;
+        renderCommonality(compare);
+      };
+    });
+    const tog = $("btnBrowseToggle");
+    if (tog) {
+      tog.onclick = () => {
+        state.browseOpen = !state.browseOpen;
+        renderCommonality(compare);
+      };
+    }
+    let html = "";
+    if (!state.browseOpen) {
+      html = `<tr><td class="caption">Raw 1600-clock list is hidden. Use the grouped tables above — that is the full analysis.</td></tr>`;
+    } else if (!rows.length) {
+      html = `<tr><td class="caption">No clocks at this threshold. Choose 80%, 70%, or All.</td></tr>`;
+    } else {
+      const start = state.browsePage * BROWSE_PAGE;
+      const slice = rows.slice(start, start + BROWSE_PAGE);
+      html = `<tr><th>#</th><th>Clock commonality</th><th>Recommend</th><th>Name</th></tr>`;
+      for (const c of slice) {
+        const rec = c.recommend === "redundant" ? "redundant" : "keep";
+        const cls = rec === "redundant" ? "row-reject" : "row-keep";
+        html += `<tr class="${cls}">
+          <td class="num">${c.index}</td>
+          <td>${c.pct}%${c.match_all ? " · all files" : ` · ${c.agree_n}/${c.files_n} files`}</td>
+          <td><span class="tag tag-${rec}">${rec === "redundant" ? "Redundant" : "Keep"}</span></td>
+          <td>${esc(c.label)}</td>
+        </tr>`;
+      }
+      html += `<tr><td colspan="4"><div class="role-filter">
+        <button type="button" class="ghost" id="btnBrowsePrev" ${state.browsePage <= 0 ? "disabled" : ""}>Previous 25</button>
+        <span>Page ${state.browsePage + 1} / ${pages}</span>
+        <button type="button" class="ghost" id="btnBrowseNext" ${state.browsePage >= pages - 1 ? "disabled" : ""}>Next 25</button>
+      </div></td></tr>`;
+    }
+    if ($("commonalityTable")) $("commonalityTable").innerHTML = html;
+    const prev = $("btnBrowsePrev");
+    const next = $("btnBrowseNext");
+    if (prev) prev.onclick = () => { state.browsePage -= 1; renderCommonality(compare); };
+    if (next) next.onclick = () => { state.browsePage += 1; renderCommonality(compare); };
+  }
 }
 
 function renderResults({ reports, compare }) {
   $("empty").classList.add("hidden");
   $("results").classList.remove("hidden");
 
+  const com = compare.commonality || {};
   const nCommon = (compare.common_rows || []).length;
   const nDiff = (compare.diff_rows || []).length;
   $("stats").innerHTML = `
+    <div class="stat"><b>${com.pct != null ? com.pct + "%" : "—"}</b><span>genuine commonality</span></div>
     <div class="stat"><b>${reports.length}</b><span>files compared</span></div>
     <div class="stat"><b>${nCommon}</b><span>items the same</span></div>
     <div class="stat"><b>${nDiff}</b><span>items that differ</span></div>
   `;
   $("hint").textContent = compare.tester_hint;
+  renderCommonality(compare);
 
   const groups = compare.partition_groups || [];
-  const cross = groups.filter((g) => g.cross_test);
   $("partitionGroups").innerHTML = groups.length
     ? groups
         .map((g) => {
@@ -369,7 +566,11 @@ function renderResults({ reports, compare }) {
           const flag = g.cross_test
             ? `<span class="tag tag-keep">same partition, different tests</span>`
             : "";
-          return `<div class="kv"><strong>${esc(g.partition)}</strong> · ${esc(types)} ${flag}<div class="caption">${files}</div></div>`;
+          const pct =
+            g.commonality_pct != null
+              ? ` · ${g.commonality_pct}% (${g.commonality_matched}/${g.commonality_clocks})`
+              : "";
+          return `<div class="kv"><strong>${esc(g.partition)}</strong> · ${esc(types)}${pct} ${flag}<div class="caption">${files}</div></div>`;
         })
         .join("")
     : "";
@@ -383,7 +584,7 @@ function renderResults({ reports, compare }) {
     ? compare.shared_events.map((e) => `<li>${e.label}</li>`).join("")
     : "<li>No shared setup-step types.</li>";
 
-  $("cards").innerHTML = reports
+  $("cards").innerHTML = `<details class="fold"><summary>${reports.length} files — expand details</summary><div class="cards" style="margin-top:10px">${reports
     .map((r) => {
       const h = r.header || {};
       return `<article class="card">
@@ -395,7 +596,7 @@ function renderResults({ reports, compare }) {
         <div class="kv">Fault: ${h.fault_model || "—"} · Test: ${h.test_set_type || "—"} · setup cycles: ${r.setup_cycles}</div>
       </article>`;
     })
-    .join("");
+    .join("")}</div></details>`;
 }
 
 function htmlTable(rows, reports, emptyText, kind) {
@@ -412,6 +613,39 @@ function htmlTable(rows, reports, emptyText, kind) {
     html += `<tr class="diff"><td>${esc(row.item)}</td><td>${perFileStack(reports, row.values)}</td></tr>`;
   }
   return html + "</tbody></table>";
+}
+
+function clockReportHtml(compare) {
+  const com = compare && compare.commonality;
+  if (!com || com.pct == null || (com.files_n || 0) < 2) return "";
+  const groups = groupCommonClocks(com.cycles || []);
+  const uncommon = (com.cycles || []).filter((c) => !c.match_all);
+  let commonTbl = "<p class='empty-note'>No clocks are identical in every selected file.</p>";
+  if (groups.length) {
+    commonTbl = `<table><thead><tr><th>What</th><th>Tester clocks</th><th>Recommend</th></tr></thead><tbody>`;
+    for (const g of groups) {
+      commonTbl += `<tr class="same"><td>${esc(g.label)} · ${g.count} clock(s)</td><td>${esc(g.clocks)}</td><td>${g.recommend === "redundant" ? "Redundant" : "Keep"}</td></tr>`;
+    }
+    commonTbl += "</tbody></table>";
+  }
+  let uncommonTbl = `<p class='empty-note'>Every TEST_SETUP clock matches in all ${com.files_n} files.</p>`;
+  if (uncommon.length) {
+    uncommonTbl = `<table><thead><tr><th>Clock</th><th>Per file</th><th>Recommend</th></tr></thead><tbody>`;
+    for (const c of uncommon) {
+      const files = (c.per_file || [])
+        .map((f) => `<div class="per-file"><span class="pf-name">${esc(shortName(f.file))}</span><span class="pf-val">${esc(f.pins)}</span></div>`)
+        .join("");
+      uncommonTbl += `<tr class="diff"><td>#${c.index} ${esc(c.label)} · ${c.pct}%</td><td>${files}</td><td>${c.recommend === "redundant" ? "Redundant" : "Keep"}</td></tr>`;
+    }
+    uncommonTbl += "</tbody></table>";
+  }
+  return `
+  <h2>Clocks that are common</h2>
+  <p class="caption">${com.matched} / ${com.clocks} clocks identical in all ${com.files_n} files.</p>
+  ${commonTbl}
+  <h2>Clocks that are not common</h2>
+  <p class="caption">${com.unmatched} clocks differ across the selected files.</p>
+  ${uncommonTbl}`;
 }
 
 function buildHtmlReport({ reports, compare }) {
@@ -468,9 +702,16 @@ function buildHtmlReport({ reports, compare }) {
   <p class="meta">Generated ${esc(when)} &nbsp;·&nbsp; ${reports.length} file(s)</p>
   <div class="summary">${esc(compare.tester_hint)}</div>
   <p class="stats">${common.length} items the same &nbsp;·&nbsp; ${diff.length} items that differ</p>
+  ${
+    (compare.commonality && compare.commonality.pct != null)
+      ? `<div class="summary"><b>Genuine commonality ${esc(compare.commonality.pct)}%</b> — ${esc(compare.commonality.matched)} / ${esc(compare.commonality.clocks)} TEST_SETUP clocks identical in all ${esc(compare.commonality.files_n)} files. ${esc(compare.commonality.unmatched)} clocks differ. Keep ${esc(compare.commonality.keep_n)} · Redundant ${esc(compare.commonality.redundant_n)}.</div>`
+      : ""
+  }
 
   <h2>Files compared</h2>
   <ol>${reports.map((r) => `<li>${esc(r.file)}</li>`).join("")}</ol>
+
+  ${clockReportHtml(compare)}
 
   <h2>What is the same in every selected file</h2>
   <p class="caption">Shared reset / protocol settings.</p>
@@ -556,29 +797,38 @@ function renderExplore(data) {
   const filter = state.exploreRoleFilter || "all";
   const shown = cycles.filter((c) => filter === "all" || clockRole(c) === filter);
   $("exploreStatus").textContent = data.note || "";
-  let rows = shown
-    .map((c) => {
-      const kind = clockRole(c);
-      return `<tr class="row-${kind}">
-        <td class="num">${c.index}</td>
-        <td><span class="tag tag-${kind}">${clockRoleLabel(kind)}</span></td>
-        <td>${esc(c.label)}</td>
-        <td>${esc(c.meaning)}</td>
-        <td>${esc(c.pins)}</td>
+  const map = new Map();
+  for (const c of shown) {
+    const kind = clockRole(c);
+    const key = `${c.label}\0${kind}`;
+    if (!map.has(key)) {
+      map.set(key, { label: c.label, kind, meaning: c.meaning, indices: [] });
+    }
+    map.get(key).indices.push(c.index);
+  }
+  const groups = [...map.values()];
+  let rows = groups
+    .map((gr) => {
+      return `<tr class="row-${gr.kind}">
+        <td>${esc(clockRanges(gr.indices))}</td>
+        <td><span class="tag tag-${gr.kind}">${clockRoleLabel(gr.kind)}</span></td>
+        <td>${esc(gr.label)} · ${gr.indices.length} clock(s)</td>
+        <td>${esc(gr.meaning)}</td>
       </tr>`;
     })
     .join("");
   $("exploreBody").innerHTML = `
     <div class="opt-summary">
       <div class="stat"><b>${g.clock_count ?? cycles.length}</b><span>tester clocks in TEST_SETUP</span></div>
+      <div class="stat"><b>${groups.length}</b><span>step groups (not 1600 rows)</span></div>
       <div class="stat"><b>${esc(shortName(g.file || ""))}</b><span>file used for this list</span></div>
     </div>
     ${roleFilterBar("explore", filter)}
-    <p class="caption">Clock 0 is the first setup clock. After clock ${Math.max((g.clock_count || 1) - 1, 0)} the 1000 stuck-at patterns start. Filter Keep or Reject. You control what is shown. SIB/TDR pin values below are from this file; other files use the same steps with different TDI bits.</p>
+    <p class="caption">Full bring-up is grouped by step. TDR is one row (1400 clocks), not 1400 lines. Filter Keep or Reject. Download the report if you need every clock index.</p>
     <div class="table-wrap">
       <table class="cycle-table">
-        <tr><th>#</th><th>Role</th><th>Name</th><th>What this clock does</th><th>Pins</th></tr>
-        ${rows || `<tr><td colspan="5" class="caption">No clocks in this filter.</td></tr>`}
+        <tr><th>Clocks</th><th>Role</th><th>Name</th><th>What this does</th></tr>
+        ${rows || `<tr><td colspan="4" class="caption">No clocks in this filter.</td></tr>`}
       </table>
     </div>
   `;
@@ -687,17 +937,16 @@ function groupList(groups, mode) {
   if (!groups.length) return "<p class='why'>None.</p>";
   return groups
     .map((g, i) => {
-      const clocks = (g.cycles || []).map((n) => n).join(", ");
-      const pins = g.pins ? `<div class="clk">${esc(g.pins)}</div>` : "";
+      const idxs = g.cycles || [];
+      const clocks = idxs.join(",");
+      const ranges = clockRanges(idxs);
       const btns = `<div class="review-btns">
           <button type="button" class="btn-keep" data-rev="keep" data-gi="${i}">Keep</button>
           <button type="button" class="btn-remove" data-rev="remove" data-gi="${i}">Reject</button>
         </div>`;
-      const countBit = mode === "review" ? "" : ` · ${g.count} clock(s)`;
       return `<div class="opt-item" data-cycles="${esc(clocks)}">
-        <div><strong>${esc(g.label)}</strong>${countBit}</div>
-        <div class="clk">tester clock # ${esc(clocks)}</div>
-        ${pins}
+        <div><strong>${esc(g.label)}</strong> · ${g.count || idxs.length} clock(s)</div>
+        <div class="clk">${esc(ranges)}</div>
         <p class="why">${esc(g.reason)}</p>
         ${btns}
       </div>`;
@@ -741,7 +990,7 @@ function buildOptimizeHtml(data) {
       .map(
         (g) => `<div class="item ${cls}">
       <h3>${esc(g.label)} · ${g.count} clock(s)</h3>
-      <p class="clk">tester clock # ${(g.cycles || []).join(", ")}</p>
+      <p class="clk">${esc(clockRanges(g.cycles || []))}</p>
       <p>${esc(g.reason)}</p>
     </div>`
       )
@@ -816,7 +1065,7 @@ function renderOptimize(data) {
         showKeep
           ? `<div class="opt-col keep">
         <h3>Keep — recommendations to keep</h3>
-        <p class="caption">SIB, TDR, IR, first reset, TAP exits. You can still Keep or Reject each group. GBC will not auto-cut these.</p>
+        <p class="caption">SIB, TDR, IR, first reset, TAP exits — grouped by step. Keep or Reject applies to the whole group.</p>
         ${groupList(s.kept || [], "keep")}
       </div>`
           : ""
@@ -825,7 +1074,7 @@ function renderOptimize(data) {
         showReject
           ? `<div class="opt-col review">
         <h3>Recommendations for rejection</h3>
-        <p class="caption">One row per tester clock. These are recommendations only. Click Keep or Reject. You control the filter and the decision.</p>
+        <p class="caption">Grouped by step — not one row per clock. Recommendations only. Click Keep or Reject on a group to label all of its clocks.</p>
         ${groupList(s.review || [], "review")}
       </div>`
           : ""
@@ -841,8 +1090,7 @@ function renderOptimize(data) {
 
 async function submitReview(label, itemEl) {
   if (!state.lastOptimize || !itemEl) return;
-  const cycles = (itemEl.querySelector(".clk")?.textContent || "")
-    .replace("tester clock #", "")
+  const cycles = String(itemEl.getAttribute("data-cycles") || "")
     .split(",")
     .map((s) => parseInt(s.trim(), 10))
     .filter((n) => !Number.isNaN(n));

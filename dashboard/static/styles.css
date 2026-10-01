@@ -124,6 +124,8 @@ table.field-table th:first-child, table.field-table td:first-child { width: 11.5
 .per-file:first-child { padding-top: 0; }
 .pf-name { color: var(--muted); word-break: break-all; }
 .pf-val { min-width: 0; }
+details.fold { max-width: 100%; }
+details.fold summary { cursor: pointer; color: var(--muted); }
 details.bits { max-width: 100%; }
 details.bits summary { cursor: pointer; list-style-position: outside; }
 .bits-dump {
@@ -203,6 +205,15 @@ tr.row-waste td, tr.row-reject td { background: #3a2418; }
 .role-filter { display: flex; align-items: center; gap: 8px; margin: 8px 0 12px; flex-wrap: wrap; }
 .role-filter span { color: var(--muted); }
 .role-filter button.on { background: var(--accent-2); border-color: var(--accent); color: #fff; }
+.commonality-score {
+  display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-end;
+  margin: 8px 0 16px; padding: 14px 16px;
+  border: 1px solid var(--line); background: var(--panel);
+}
+.commonality-score .pct { font-size: 40px; font-weight: 700; line-height: 1; letter-spacing: -0.03em; }
+.commonality-score .frac { color: var(--muted); margin-top: 6px; }
+.island-score { margin: 0 0 8px; }
+.tag-redundant { color: var(--warn); }
 
 .busy {
   margin: 16px 0;

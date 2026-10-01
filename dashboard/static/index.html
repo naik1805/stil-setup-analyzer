@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>STIL test-setup analyzer</title>
-  <link rel="stylesheet" href="/styles.css?v=22" />
+  <link rel="stylesheet" href="/styles.css?v=24" />
 </head>
 <body>
   <header class="top">
@@ -54,12 +54,39 @@
           <div class="callout" id="hint"></div>
           <button id="btnDownloadTop" type="button" class="primary">Download HTML report</button>
         </div>
+        <div id="commonalityWrap" class="hidden">
+          <h2>Genuine commonality</h2>
+          <p class="caption">How common these files are: TEST_SETUP clocks with the same pin values in every selected file. The big number is the real percent. Details below are grouped — not 1600 rows.</p>
+          <div id="commonalityScore"></div>
+          <div id="commonalityIslands"></div>
+        </div>
         <div id="partitionGroupsWrap" class="hidden">
           <h2>Same partition across test types</h2>
           <p class="caption">Setup-clock optimize applies per DFT island even when ScanShift, MBIST, and stuck-at are different files.</p>
           <div id="partitionGroups"></div>
         </div>
         <div class="stats" id="stats"></div>
+
+        <div id="clockReportWrap" class="hidden">
+          <h2>Clocks that are common</h2>
+          <p class="caption">These TEST_SETUP clocks have the same pin values in every selected file. Grouped by step so you do not scroll 1600 rows.</p>
+          <div class="table-wrap">
+            <table id="commonClocksTable" class="field-table"></table>
+          </div>
+
+          <h2>Clocks that are not common</h2>
+          <p class="caption">These clocks differ in at least one file. That is the genuine gap behind the percent above.</p>
+          <div class="table-wrap">
+            <table id="uncommonClocksTable" class="field-table"></table>
+          </div>
+
+          <h2>Browse clocks by score</h2>
+          <p class="caption">Optional and paged. Leave this closed unless you need a raw page of clocks. 90 / 80 / 70 does not change the percent.</p>
+          <div id="commonalityFilter"></div>
+          <div class="table-wrap">
+            <table id="commonalityTable" class="cycle-table"></table>
+          </div>
+        </div>
 
         <h2>What is the same in every selected file</h2>
         <p class="caption">These items match in all files you selected. This is the shared reset / protocol. One value, not a column per file.</p>
@@ -118,6 +145,6 @@
       </div>
     </div>
   </div>
-  <script src="app.js?v=26"></script>
+  <script src="app.js?v=30"></script>
 </body>
 </html>
